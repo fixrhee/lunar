@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:udp="http://www.mulesoft.org/schema/mule/udp"
+	xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns:json="http://www.mulesoft.org/schema/mule/json"
+	xmlns:vm="http://www.mulesoft.org/schema/mule/vm" xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:spring="http://www.springframework.org/schema/beans" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.mulesoft.org/schema/mule/json http://www.mulesoft.org/schema/mule/json/current/mule-json.xsd
+http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/vm http://www.mulesoft.org/schema/mule/vm/current/mule-vm.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/udp http://www.mulesoft.org/schema/mule/udp/current/mule-udp.xsd">
+
+
+	<flow name="requestLogConfigFlow">
+		<vm:inbound-endpoint exchange-pattern="one-way"
+			connector-ref="Access_Log_VM" path="request.access.log" doc:name="VM" />
+		<set-variable value="#[xpath3('//mandiri:request/mandiri:billKey1')]"
+			variableName="noVA" doc:name="Variable" />
+		<set-payload value="#[payload.replace('\n', '').replace('\r', '');]"
+			doc:name="Set Payload" />
+		<set-variable variableName="path"
+			value="#[message.inboundProperties.'path']" doc:name="Variable" />
+		<logger level="INFO" category="access.log"
+			message="[REQUEST  {#[message.id]}: #[payload]]" doc:name="Logger" />
+		<expression-component doc:name="Expression">
+			<![CDATA[
+			gelfMap = new java.util.HashMap();
+			gelfMap['version']= '1.1';
+			gelfMap['host']= server.host;
+			gelfMap['short_message']= '[REQUEST : ' + flowVars['path'] + ']';
+			gelfMap['full_message']= payload;
+			gelfMap['_message_id']= message.id;
+			gelfMap['_referenceNumber']= noVA;
+			gelfMap['level']= '1';
+			payload = gelfMap;]]>
+		</expression-component>
+		<json:object-to-json-transformer
+			doc:name="Object to JSON" />
+		<logger level="INFO" message="#[payload]" doc:name="Logger" />
+		<udp:outbound-endpoint exchange-pattern="one-way"
+			connector-ref="GrayLogUDP" host="${app.log.url}" port="${app.log.port}"
+			doc:name="UDP" />
+	</flow>
+
+	<flow name="respondLogConfigFlow">
+		<vm:inbound-endpoint exchange-pattern="one-way"
+			connector-ref="Access_Log_VM" path="response.access.log" doc:name="VM" />
+		<set-payload value="#[payload.replace('\n', '').replace('\r', '');]"
+			doc:name="Set Payload" />
+		<set-variable variableName="path"
+			value="#[message.inboundProperties.'path']" doc:name="Variable" />
+		<set-variable variableName="referenceNo"
+			value="#[message.inboundProperties.'referenceNo']" doc:name="Variable" />
+		<logger level="INFO" category="access.log"
+			message="[RESPONSE {#[message.id]}: #[payload]]" doc:name="Logger" />
+		<expression-component doc:name="Expression">
+			<![CDATA[
+			gelfMap = new java.util.HashMap();
+			gelfMap['version']= '1.1';
+			gelfMap['host']= server.host;
+			gelfMap['short_message']= '[RESPONSE : ' + flowVars['path'] + ']';
+			gelfMap['full_message']= payload;
+			gelfMap['_message_id']= message.id;
+			gelfMap['_referenceNumber']= referenceNo;
+			gelfMap['level']= '1';
+			payload = gelfMap;]]>
+		</expression-component>
+		<json:object-to-json-transformer
+			doc:name="Object to JSON" />
+		<logger level="INFO" message="#[payload]" doc:name="Logger" />
+		<udp:outbound-endpoint exchange-pattern="one-way"
+			connector-ref="GrayLogUDP" host="${app.log.url}" port="${app.log.port}"
+			doc:name="UDP" />
+	</flow>
+
+</mule>

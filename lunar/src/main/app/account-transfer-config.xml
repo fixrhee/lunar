@@ -1,0 +1,179 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:jms="http://www.mulesoft.org/schema/mule/jms"
+	xmlns:udp="http://www.mulesoft.org/schema/mule/udp" xmlns:tracking="http://www.mulesoft.org/schema/mule/ee/tracking"
+	xmlns:vm="http://www.mulesoft.org/schema/mule/vm" xmlns:mulexml="http://www.mulesoft.org/schema/mule/xml"
+	xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:spring="http://www.springframework.org/schema/beans" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.mulesoft.org/schema/mule/vm http://www.mulesoft.org/schema/mule/vm/current/mule-vm.xsd
+http://www.mulesoft.org/schema/mule/xml http://www.mulesoft.org/schema/mule/xml/current/mule-xml.xsd
+http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/ee/tracking http://www.mulesoft.org/schema/mule/ee/tracking/current/mule-tracking-ee.xsd
+http://www.mulesoft.org/schema/mule/udp http://www.mulesoft.org/schema/mule/udp/current/mule-udp.xsd
+http://www.mulesoft.org/schema/mule/jms http://www.mulesoft.org/schema/mule/jms/current/mule-jms.xsd">
+
+	<spring:beans>
+		<spring:bean id="RSASecurity"
+			class="com.jpa.optima.lunar.process.RSASecurityUtils">
+			<spring:constructor-arg index="0"
+				value="${account.transfer.modulus}"></spring:constructor-arg>
+			<spring:constructor-arg index="1"
+				value="${account.transfer.exp.key}"></spring:constructor-arg>
+		</spring:bean>
+	</spring:beans>
+
+	<spring:beans>
+		<spring:bean id="SignatureProcessor"
+			class="com.jpa.optima.lunar.process.SignatureProcessor">
+			<spring:property name="rsaUtils" ref="RSASecurity" />
+		</spring:bean>
+	</spring:beans>
+
+	<flow name="account-transfer-configFlow">
+		<jms:inbound-endpoint connector-ref="Active_MQ"
+			queue="mandiri.account.transfer" exchange-pattern="one-way" />
+		<set-variable variableName="trxType"
+			value="#[message.inboundProperties.'TRANSACTION_TYPE']" doc:name="Variable" />
+		<logger level="INFO" message="#[payload]" />
+		<set-variable variableName="originalPayload" value="#[payload]"
+			doc:name="Variable" />
+		<set-variable variableName="signatureContent"
+			value="#[payload.fromAccountNumber]#[payload.toAccountNumber]IDR#[payload.amount]#[payload.traceNumber]"
+			doc:name="Variable" />
+		<logger level="INFO" message="[SIGNATURE Content: #[signatureContent]]" />
+		<!-- set-payload value="#[org.apache.commons.codec.digest.DigestUtils.sha1Hex(signatureContent)]" 
+			/ -->
+		<set-payload value="#[signatureContent]" />
+		<pooled-component>
+			<spring-object bean="SignatureProcessor" />
+		</pooled-component>
+		<set-variable value="#[java.time.LocalDateTime.now()]"
+			variableName="timestamp" doc:name="Variable" />
+		<set-variable
+			value="#[org.apache.commons.lang.StringUtils.substring(timestamp,0,10)]"
+			variableName="date" doc:name="Variable" />
+		<set-variable value="#[message.id]" variableName="correlationID"
+			doc:name="Variable" />
+		<expression-component doc:name="Expression">
+		<![CDATA[
+		
+		timestamp = new java.sql.Timestamp(System.currentTimeMillis());
+		instant = timestamp.toInstant();
+		
+		
+			msg='<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" xmlns:SOAPENC="http://schemas.xmlsoap.org/soap/encoding/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:m0="urn:mandiri:autopay:types:v090212">
+				   <SOAP-ENV:Header></SOAP-ENV:Header>
+				   <SOAP-ENV:Body>
+				      <m:PaymentRequest xmlns:m="http://www.bankmandiri.co.id/autopay/ws/processors/payment">
+				         <m0:PaymentRequest>
+				            <requestHeader>
+				               <clientId>59</clientId>
+				               <externalId>' + originalPayload['traceNumber'] + '</externalId>
+				               <channelId>1</channelId>
+				               <timestamp>' + instant + '</timestamp>
+				            </requestHeader>
+				            <securityHeader>
+				               <signature>' + payload + '</signature>
+				            </securityHeader>
+				            <body>
+				               <debitAccountNo>' + originalPayload['fromAccountNumber'] + '</debitAccountNo>
+				               <creditAccountNo>' + originalPayload['toAccountNumber'] + '</creditAccountNo>
+				               <valueDate>' + flowVars['date'] + '</valueDate>
+				               <valueCurrency>IDR</valueCurrency>
+				               <valueAmount>' + originalPayload['amount'] + '</valueAmount>
+				               <destinationBankCode>' + originalPayload['bankCode'] + '</destinationBankCode>
+				               <beneficiaryName>' + originalPayload['toAccountName'] + '</beneficiaryName>
+				               <preferredTransferMethodId>' + originalPayload['transferMethod'] + '</preferredTransferMethodId>
+				               <chargingModelId>' + originalPayload['chargingCode'] + '</chargingModelId>
+				               <remark1>' + originalPayload['remark'] + '</remark1>
+				               <customerReferenceNumber>' + message.id + '</customerReferenceNumber>
+				               <extendedPaymentDetail>' + originalPayload['username'] + '/' + originalPayload['traceNumber'] + '</extendedPaymentDetail>
+				               <beneficiaryEmailAddress>' + originalPayload['toEmailAddress'] + '</beneficiaryEmailAddress>
+				               <paymentMethod>SP1</paymentMethod>
+				               <reservedField1>1</reservedField1>
+				               <reservedField2>1</reservedField2>
+				            </body>
+				         </m0:PaymentRequest>
+				      </m:PaymentRequest>
+				   </SOAP-ENV:Body>
+				</SOAP-ENV:Envelope>';
+			payload = msg;]]>
+		</expression-component>
+		<logger level="INFO" message="[REQUEST : #[payload]]" />
+		<http:request config-ref="HTTP_Request_Account_Transfer_Configuration"
+			path="autopay.ws.processors:payment/autopay_ws_processors_payment_Port"
+			responseTimeout="80000" method="POST" doc:name="HTTP">
+			<http:request-builder>
+				<http:header headerName="soapaction" value="&quot;PaymentRequest&quot;" />
+			</http:request-builder>
+			<http:success-status-code-validator
+				values="200,500" />
+		</http:request>
+		<byte-array-to-string-transformer
+			doc:name="Byte Array to String" />
+		<logger level="INFO" message="[RESPONSE : #[payload]]" />
+		<set-variable value="#[xpath3('//responseHeader/responseCode')]"
+			variableName="status" doc:name="Variable" />
+		<set-variable value="#[xpath3('//responseHeader/errorMessage')]"
+			variableName="errorMessage" doc:name="Variable" />
+		<choice>
+			<when expression="#[status == '1']">
+				<expression-component doc:name="Expression">
+					<![CDATA[
+					responseMap = new java.util.HashMap();
+					responseMap['status']= '00';
+					responseMap['amount']= originalPayload['amount'];			
+					responseMap['referenceNumber']= flowVars['correlationID'];	
+					responseMap['traceNumber']= originalPayload['traceNumber'];
+					responseMap['transactionNumber']= originalPayload['transactionNumber'];
+					responseMap['transferID']= originalPayload['transferID'];
+					responseMap['bankName']= originalPayload['bankName'];
+					responseMap['toAccountNumber']= originalPayload['toAccountNumber'];
+				responseMap['token']= originalPayload['token'];
+					payload = responseMap;]]>
+				</expression-component>
+			</when>
+			<otherwise>
+				<expression-component doc:name="Expression">
+					<![CDATA[
+					responseMap = new java.util.HashMap();
+					responseMap['status']= '02';
+					responseMap['amount']= originalPayload['amount'];			
+					responseMap['referenceNumber']= flowVars['correlationID'];	
+					responseMap['traceNumber']= originalPayload['traceNumber'];
+					responseMap['transactionNumber']= originalPayload['transactionNumber'];
+					responseMap['transferID']= originalPayload['transferID'];
+					responseMap['bankName']= originalPayload['bankName'];
+					responseMap['toAccountNumber']= originalPayload['toAccountNumber'];
+					responseMap['token']= originalPayload['token'];
+					payload = responseMap;]]>
+				</expression-component>
+			</otherwise>
+		</choice>
+		<jms:outbound-endpoint connector-ref="Active_MQ"
+			queue="interbank.account.transfer.response" exchange-pattern="one-way" />
+		<catch-exception-strategy>
+			<logger level="ERROR" message="[Transfer Account Exception]" />
+			<expression-component doc:name="Expression">
+					<![CDATA[
+					responseMap = new java.util.HashMap();
+					responseMap['status']= '02';
+					responseMap['amount']= originalPayload['amount'];			
+					responseMap['referenceNumber']= flowVars['correlationID'];	
+					responseMap['traceNumber']= originalPayload['traceNumber'];
+					responseMap['transactionNumber']= originalPayload['transactionNumber'];
+					responseMap['transferID']= originalPayload['transferID'];
+					responseMap['bankName']= originalPayload['bankName'];
+					responseMap['toAccountNumber']= originalPayload['toAccountNumber'];
+					responseMap['token']= originalPayload['token'];
+					payload = responseMap;]]>
+			</expression-component>
+			<jms:outbound-endpoint connector-ref="Active_MQ"
+				queue="interbank.account.transfer.response" exchange-pattern="one-way" />
+		</catch-exception-strategy>
+	</flow>
+
+</mule>

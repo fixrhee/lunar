@@ -1,0 +1,392 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:context="http://www.springframework.org/schema/context"
+	xmlns:jms="http://www.mulesoft.org/schema/mule/jms" xmlns:udp="http://www.mulesoft.org/schema/mule/udp"
+	xmlns:tracking="http://www.mulesoft.org/schema/mule/ee/tracking"
+	xmlns:vm="http://www.mulesoft.org/schema/mule/vm" xmlns:mulexml="http://www.mulesoft.org/schema/mule/xml"
+	xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:spring="http://www.springframework.org/schema/beans" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.mulesoft.org/schema/mule/jms http://www.mulesoft.org/schema/mule/jms/current/mule-jms.xsd
+http://www.mulesoft.org/schema/mule/vm http://www.mulesoft.org/schema/mule/vm/current/mule-vm.xsd
+http://www.mulesoft.org/schema/mule/xml http://www.mulesoft.org/schema/mule/xml/current/mule-xml.xsd
+http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/ee/tracking http://www.mulesoft.org/schema/mule/ee/tracking/current/mule-tracking-ee.xsd
+http://www.mulesoft.org/schema/mule/udp http://www.mulesoft.org/schema/mule/udp/current/mule-udp.xsd
+http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context-current.xsd">
+
+	<context:property-placeholder location="${mule.env}.properties" />
+
+	<http:listener-config name="HTTP_Listener_Configuration"
+		host="${app.va.url}" port="${app.va.port}" basePath="optima/middleware/mandiri"
+		doc:name="HTTP Listener Configuration" />
+
+	<http:listener-config name="HTTP_JPA_PBK_Listener_Configuration"
+		host="${app.account.transfer.url}" port="${app.account.transfer.port}"
+		basePath="optima/middleware/mandiri" doc:name="HTTP Listener Configuration" />
+
+	<http:request-config name="HTTP_Request_Account_Transfer_Configuration"
+		host="${account.transfer.ws.url}" port="${account.transfer.ws.port}"
+		basePath="ws" doc:name="HTTP Request Configuration">
+		<http:basic-authentication username="${account.transfer.auth.username}"
+			password="${account.transfer.auth.password}" />
+	</http:request-config>
+
+	<http:request-config name="HTTP_Request_Configuration"
+		host="${api.ws.url}" port="${api.ws.port}" basePath="bellatrix/host/services/ws"
+		doc:name="HTTP Request Configuration" />
+
+	<http:request-config name="HTTP_Mandiri_PBK_Request_Configuration"
+		host="${api.ws.url}" port="${api.ws.port}" basePath="bellatrix/host/services/ws"
+		doc:name="HTTP Request Configuration" />
+
+	<mulexml:namespace-manager
+		includeConfigNamespaces="true">
+		<mulexml:namespace prefix="mandiri"
+			uri="bankmandiri.h2h.billpayment.ws" />
+	</mulexml:namespace-manager>
+
+	<vm:connector name="Access_Log_VM" validateConnections="true"
+		doc:name="VM" />
+
+	<udp:connector name="GrayLogUDP" validateConnections="true"
+		keepSendSocketOpen="true" doc:name="UDP" />
+
+	<jms:activemq-connector name="Active_MQ"
+		specification="1.1" brokerURL="${jms.broker.url}"
+		disableTemporaryReplyToDestinations="true" validateConnections="true"
+		doc:name="Active MQ" />
+
+	<flow name="Mandiri_Inquiry_MiddlewareFlow">
+		<http:listener config-ref="HTTP_Listener_Configuration"
+			path="/inquiry" doc:name="HTTP" />
+		<response>
+			<message-properties-transformer
+				doc:name="Message Properties">
+				<add-message-property key="Content-Type" value="application/xml" />
+			</message-properties-transformer>
+		</response>
+		<byte-array-to-string-transformer
+			doc:name="Byte Array to String" />
+		<set-property value="Inquiry" propertyName="path"
+			doc:name="Property" />
+		<vm:outbound-endpoint exchange-pattern="one-way"
+			path="request.access.log" connector-ref="Access_Log_VM" doc:name="VM" />
+		<set-variable value="#[message.id]" variableName="correlationID"
+			doc:name="Variable" />
+		<set-variable value="#[xpath3('//mandiri:request/mandiri:billKey1')]"
+			variableName="noVA" doc:name="Variable" />
+		<set-variable value="#[xpath3('//mandiri:request/mandiri:billKey2')]"
+			variableName="billkeyAmount" doc:name="Variable" />
+		<set-variable value="#[xpath3('//mandiri:request/mandiri:paymentAmount')]"
+			variableName="paymentAmount" doc:name="Variable" />
+
+		<choice doc:name="Choice">
+			<when expression="#[org.mule.util.StringUtils.isNotEmpty(billkeyAmount)]">
+				<set-variable value="#[flowVars['billkeyAmount']]"
+					variableName="amount" doc:name="Variable" />
+			</when>
+			<when expression="#[org.mule.util.StringUtils.isNotEmpty(paymentAmount)]">
+				<set-variable value="#[flowVars['paymentAmount']]"
+					variableName="amount" doc:name="Variable" />
+			</when>
+			<otherwise>
+				<set-variable value="#[0]" variableName="amount"
+					doc:name="Variable" />
+			</otherwise>
+		</choice>
+
+		<set-variable value="#[xpath3('//mandiri:request/mandiri:companyCode')]"
+			variableName="bin" doc:name="Variable" />
+		<set-variable value="${va.prefix.code}" variableName="vaPrefix"
+			doc:name="Variable" />
+		<choice doc:name="Choice">
+			<when expression="#[(noVA.length() &gt; 0) &amp;&amp; (noVA.length()&lt; 13)]">
+				<choice>
+					<when
+						expression="#[org.apache.commons.lang.StringUtils.substring(noVA,5,6) == '1']">
+						<logger level="INFO"
+							message="[Topup Deposit MERCHANT Inquiry REQUEST/#[correlationID] : {vaNumber=#[noVA]}, {amount=#[amount]}]"
+							doc:name="Logger" />
+						<set-variable
+							value="#[org.apache.commons.lang.StringUtils.substring(noVA,5)]"
+							variableName="refNo" doc:name="Variable" />
+						<flow-ref name="inquiryTopup" doc:name="Flow Reference" />
+					</when>
+					<otherwise>
+						<logger level="INFO"
+							message="[Topup Deposit AGENT Inquiry REQUEST/#[correlationID] : {vaNumber=#[noVA]}, {amount=#[amount]}]"
+							doc:name="Logger" />
+						<set-variable
+							value="#[org.apache.commons.lang.StringUtils.substring(noVA,5)]"
+							variableName="refNo" doc:name="Variable" />
+						<flow-ref name="inquiryTopup" doc:name="Flow Reference" />
+					</otherwise>
+				</choice>
+			</when>
+			<when
+				expression="#[(noVA.length() &gt;= 13) &amp;&amp; (noVA.length() &lt; 18)]">
+				<logger level="INFO"
+					message="[Topup-Inquiry REQUEST/#[correlationID] : {vaNumber=#[noVA]}, {amount=#[amount]}]"
+					doc:name="Logger" />
+				<set-variable
+					value="#[org.apache.commons.lang.StringUtils.substring(noVA,3)]"
+					variableName="refNo" doc:name="Variable" />
+				<flow-ref name="inquiryTopup" doc:name="Flow Reference" />
+			</when>
+			<otherwise>
+				<logger level="INFO"
+					message="[VA-Inquiry REQUEST/#[correlationID] : {vaNumber=#[noVA]}, {amount=#[amount]}]"
+					doc:name="Logger" />
+				<set-variable value="#[noVA]" variableName="refNo"
+					doc:name="Variable" />
+				<flow-ref name="inquiryVA" doc:name="Flow Reference" />
+			</otherwise>
+		</choice>
+		<catch-exception-strategy doc:name="Catch Exception Strategy">
+			<logger level="INFO"
+				message="[INQUIRY Failed/#[correlationID] : {vaNumber=#[noVA]}, {amount=#[amount]}]"
+				doc:name="Logger" />
+			<expression-component doc:name="Expression">
+					<![CDATA[
+						msg='<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="ht tp://www.w3.org/2001/XMLSchema-instance">
+							   <soapenv:Body>
+							      <inquiryResponse xmlns="bankmandiri.h2h.billpayment.ws">
+							         <inquiryResult>
+							            <currency>360</currency>
+							            <status>
+							               <isError>True</isError>
+							               <errorCode>01</errorCode>
+							               <statusDescription>UNKNOWN_ERROR</statusDescription>
+							            </status>
+							         </inquiryResult>
+							      </inquiryResponse>
+							   </soapenv:Body>
+							</soapenv:Envelope>';
+						payload = msg;]]>
+			</expression-component>
+		</catch-exception-strategy>
+	</flow>
+
+	<flow name="Mandiri_Payment_MiddlewareFlow">
+		<http:listener config-ref="HTTP_Listener_Configuration"
+			path="/payment" doc:name="HTTP" />
+		<response>
+			<message-properties-transformer
+				doc:name="Message Properties">
+				<add-message-property key="Content-Type" value="application/xml" />
+			</message-properties-transformer>
+		</response>
+		<byte-array-to-string-transformer
+			doc:name="Byte Array to String" />
+		<set-property value="Payment" propertyName="path"
+			doc:name="Property" />
+		<vm:outbound-endpoint exchange-pattern="one-way"
+			path="request.access.log" connector-ref="Access_Log_VM" doc:name="VM" />
+		<set-variable value="#[message.id]" variableName="correlationID"
+			doc:name="Variable" />
+		<set-variable value="#[xpath3('//mandiri:request/mandiri:billKey1')]"
+			variableName="noVA" doc:name="Variable" />
+		<set-variable value="#[xpath3('//mandiri:request/mandiri:billKey2')]"
+			variableName="billkeyAmount" doc:name="Variable" />
+		<set-variable value="#[xpath3('//mandiri:request/mandiri:paymentAmount')]"
+			variableName="paymentAmount" doc:name="Variable" />
+
+		<choice doc:name="Choice">
+			<when expression="#[org.mule.util.StringUtils.isNotEmpty(billkeyAmount)]">
+				<set-variable value="#[flowVars['billkeyAmount']]"
+					variableName="amount" doc:name="Variable" />
+			</when>
+			<otherwise>
+				<set-variable value="#[flowVars['paymentAmount']]"
+					variableName="amount" doc:name="Variable" />
+			</otherwise>
+		</choice>
+
+		<set-variable value="#[xpath3('//mandiri:request/mandiri:companyCode')]"
+			variableName="bin" doc:name="Variable" />
+		<set-variable value="#[xpath3('//mandiri:request/mandiri:channelID')]"
+			variableName="channelID" doc:name="Variable" />
+		<set-variable value="#[xpath3('//mandiri:request/mandiri:transactionID')]"
+			variableName="trxId" doc:name="Variable" />
+		<set-variable value="#[xpath3('//mandiri:request/mandiri:trxDateTime')]"
+			variableName="trxDateTime" doc:name="Variable" />
+		<set-variable
+			value="#[xpath3('//mandiri:request/mandiri:transmissionDateTime')]"
+			variableName="trmDateTime" doc:name="Variable" />
+		<set-variable value="#[bin]#[trxId]#[trxDateTime]#[trmDateTime]"
+			variableName="traceNumber" doc:name="Variable" />
+		<set-variable value="${va.prefix.code}" variableName="vaPrefix"
+			doc:name="Variable" />
+		<choice doc:name="Choice">
+			<when expression="#[(noVA.length() &gt; 0) &amp;&amp; (noVA.length()&lt; 13)]">
+				<choice>
+					<when
+						expression="#[org.apache.commons.lang.StringUtils.substring(noVA,5,6) == '1']">
+						<logger level="INFO"
+							message="[Topup Deposit MERCHANT Payment REQUEST/#[correlationID] : {vaNumber=#[noVA]}, {amount=#[amount]}, {traceNumber=#[traceNumber]}]"
+							doc:name="Logger" />
+						<set-variable
+							value="#[org.apache.commons.lang.StringUtils.substring(noVA,5)]"
+							variableName="refNo" doc:name="Variable" />
+						<flow-ref name="paymentMerchantTopup" doc:name="Flow Reference" />
+					</when>
+					<otherwise>
+						<logger level="INFO"
+							message="[Topup Deposit AGENT Payment REQUEST/#[correlationID] : {vaNumber=#[noVA]}, {amount=#[amount]}, {traceNumber=#[traceNumber]}]"
+							doc:name="Logger" />
+						<set-variable
+							value="#[org.apache.commons.lang.StringUtils.substring(noVA,5)]"
+							variableName="refNo" doc:name="Variable" />
+						<flow-ref name="paymentAgentTopup" doc:name="Flow Reference" />
+					</otherwise>
+				</choice>
+			</when>
+			<when
+				expression="#[(noVA.length() &gt;= 13) &amp;&amp; (noVA.length() &lt; 18)]">
+				<logger level="INFO"
+					message="[Topup-Payment REQUEST/#[correlationID] : {vaNumber=#[noVA]}, {amount=#[amount]}, {traceNumber=#[traceNumber]}]"
+					doc:name="Logger" />
+				<set-variable
+					value="#[org.apache.commons.lang.StringUtils.substring(noVA,3)]"
+					variableName="refNo" doc:name="Variable" />
+				<flow-ref name="paymentTopup" doc:name="Flow Reference" />
+			</when>
+			<otherwise>
+				<logger level="INFO"
+					message="[VA-Payment REQUEST/#[correlationID] : {vaNumber=#[noVA]}, {amount=#[amount]}, {traceNumber=#[traceNumber]}]"
+					doc:name="Logger" />
+				<set-variable value="#[noVA]" variableName="refNo"
+					doc:name="Variable" />
+				<flow-ref name="paymentVA" doc:name="Flow Reference" />
+			</otherwise>
+		</choice>
+		<catch-exception-strategy doc:name="Catch Exception Strategy">
+			<expression-component doc:name="Expression">
+			<![CDATA[
+				msg='<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="ht tp://www.w3.org/2001/XMLSchema-instance">
+					   <soapenv:Body>
+					      <paymentResponse xmlns="bankmandiri.h2h.billpayment.ws">
+					         <paymentResult>
+					            <currency>360</currency>
+					            <status>
+					               <isError>True</isError>
+					               <errorCode>01</errorCode>
+					               <statusDescription>UNKNOWN_ERROR</statusDescription>
+					            </status>
+					  		 </paymentResult>
+					       </paymentResponse>
+					   </soapenv:Body>
+					</soapenv:Envelope>';
+				payload = msg;]]>
+			</expression-component>
+			<logger level="INFO"
+				message="[PAYMENT Failed/#[correlationID] : {status=UNKNOWN_ERROR}, {vaNumber=#[noVA]}, {amount=#[amount]}, {traceNumber=#[traceNumber]}]"
+				doc:name="Logger" />
+		</catch-exception-strategy>
+	</flow>
+
+	<flow name="Mandiri_Reversal_MiddlewareFlow">
+		<http:listener config-ref="HTTP_Listener_Configuration"
+			path="/reversal" doc:name="HTTP" />
+		<response>
+			<message-properties-transformer
+				doc:name="Message Properties">
+				<add-message-property key="Content-Type" value="application/xml" />
+			</message-properties-transformer>
+		</response>
+		<byte-array-to-string-transformer
+			doc:name="Byte Array to String" />
+		<set-property value="Reversal" propertyName="path"
+			doc:name="Property" />
+		<vm:outbound-endpoint exchange-pattern="one-way"
+			path="request.access.log" connector-ref="Access_Log_VM" doc:name="VM" />
+		<set-variable value="#[message.id]" variableName="correlationID"
+			doc:name="Variable" />
+		<set-variable value="#[xpath3('//mandiri:request/mandiri:billKey1')]"
+			variableName="noVA" doc:name="Variable" />
+		<set-variable value="#[xpath3('//mandiri:request/mandiri:billKey2')]"
+			variableName="billkeyAmount" doc:name="Variable" />
+		<set-variable value="#[xpath3('//mandiri:request/mandiri:paymentAmount')]"
+			variableName="paymentAmount" doc:name="Variable" />
+
+		<choice doc:name="Choice">
+			<when expression="#[org.mule.util.StringUtils.isNotEmpty(billkeyAmount)]">
+				<set-variable value="#[flowVars['billkeyAmount']]"
+					variableName="amount" doc:name="Variable" />
+			</when>
+			<otherwise>
+				<set-variable value="#[flowVars['paymentAmount']]"
+					variableName="amount" doc:name="Variable" />
+			</otherwise>
+		</choice>
+
+		<set-variable value="#[xpath3('//mandiri:request/mandiri:companyCode')]"
+			variableName="bin" doc:name="Variable" />
+		<set-variable value="#[xpath3('//mandiri:request/mandiri:channelID')]"
+			variableName="channelID" doc:name="Variable" />
+		<set-variable value="#[xpath3('//mandiri:request/mandiri:transactionID')]"
+			variableName="trxId" doc:name="Variable" />
+		<set-variable value="#[xpath3('//mandiri:request/mandiri:origTrxDateTime')]"
+			variableName="trxDateTime" doc:name="Variable" />
+		<set-variable
+			value="#[xpath3('//mandiri:request/mandiri:origTransmissionDateTime')]"
+			variableName="trmDateTime" doc:name="Variable" />
+		<set-variable value="#[bin]#[trxId]#[trxDateTime]#[trmDateTime]"
+			variableName="traceNumber" doc:name="Variable" />
+
+		<set-variable value="${va.prefix.code}" variableName="vaPrefix"
+			doc:name="Variable" />
+		<choice doc:name="Choice">
+			<when expression="#[(noVA.length() &gt; 0) &amp;&amp; (noVA.length()&lt; 13)]">
+				<logger level="INFO"
+					message="[Topup Deposit-Reversal REQUEST/#[correlationID] : {vaNumber=#[noVA]}, {amount=#[amount]}, {traceNumber=#[traceNumber]}]"
+					doc:name="Logger" />
+				<set-variable
+					value="#[org.apache.commons.lang.StringUtils.substring(noVA,5)]"
+					variableName="refNo" doc:name="Variable" />
+				<flow-ref name="reversalTopup" doc:name="Flow Reference" />
+			</when>
+			<when
+				expression="#[(noVA.length() &gt;= 13) &amp;&amp; (noVA.length() &lt; 18)]">
+				<logger level="INFO"
+					message="[Topup-Inquiry REQUEST/#[correlationID] : {vaNumber=#[noVA]}, {amount=#[amount]}]"
+					doc:name="Logger" />
+				<set-variable
+					value="#[org.apache.commons.lang.StringUtils.substring(noVA,3)]"
+					variableName="refNo" doc:name="Variable" />
+				<flow-ref name="reversalTopup" doc:name="Flow Reference" />
+			</when>
+			<otherwise>
+				<logger level="INFO"
+					message="[VA-Reversal REQUEST/#[correlationID] :{vaNumber=#[noVA]}, {amount=#[amount]}, {traceNumber=#[traceNumber]}]"
+					doc:name="Logger" />
+				<flow-ref name="reversalVA" doc:name="Flow Reference" />
+			</otherwise>
+		</choice>
+		<catch-exception-strategy doc:name="Catch Exception Strategy">
+			<logger level="INFO"
+				message="[REVERSAL Failed/#[correlationID] : {vaNumber=#[noVA]}, {amount=#[amount]}, {traceNumber=#[traceNumber]}]"
+				doc:name="Logger" />
+			<expression-component doc:name="Expression">
+			<![CDATA[
+				msg='<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www .w3.org/2001/XMLSchema-instance">
+					   <soapenv:Body>
+					      <ReversalResponse xmlns="bankmandiri.h2h.billpayment.ws">
+					         <reverseResult>
+						        <status>
+					               <isError>False</isError>
+					               <errorCode>01</errorCode>
+					               <statusDescription>UNKNOWN_ERROR</statusDescription>
+					            </status>
+					         </reverseResult>
+					      </ReversalResponse>
+					   </soapenv:Body>
+					</soapenv:Envelope>';
+				payload = msg;]]>
+			</expression-component>
+		</catch-exception-strategy>
+	</flow>
+</mule>

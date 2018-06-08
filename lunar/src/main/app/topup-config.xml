@@ -1,0 +1,380 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:vm="http://www.mulesoft.org/schema/mule/vm" xmlns:http="http://www.mulesoft.org/schema/mule/http"
+	xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:spring="http://www.springframework.org/schema/beans" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="
+http://www.mulesoft.org/schema/mule/vm http://www.mulesoft.org/schema/mule/vm/current/mule-vm.xsd http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd">
+
+	<sub-flow name="inquiryTopup">
+		<set-variable variableName="tokennc" value="${api.ws.header.token.nc}"
+			doc:name="Variable" />
+		<expression-component doc:name="Expression">
+		<![CDATA[
+			msg='<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ser="http://services.bellatrix.org/">
+				   <soapenv:Header>
+				      <ser:headerAuth>
+				         <token>' + flowVars['tokennc'] + '</token>
+				      </ser:headerAuth>
+				   </soapenv:Header>
+				   <soapenv:Body>
+				      <ser:topupInquiry>
+				         <referenceNumber>' + flowVars['refNo'] + '</referenceNumber>
+				      </ser:topupInquiry>
+				   </soapenv:Body>
+				</soapenv:Envelope>';
+			payload = msg;]]>
+		</expression-component>
+		<http:request config-ref="HTTP_Request_Configuration"
+			path="interbanks" method="POST" doc:name="HTTP">
+			<http:request-builder>
+				<http:header headerName="soapaction" value="&quot;topupInquiry&quot;" />
+			</http:request-builder>
+		</http:request>
+		<byte-array-to-string-transformer
+			doc:name="Byte Array to String" />
+		<set-variable value="#[xpath3('//status/message')]"
+			variableName="status" doc:name="Variable" />
+		<choice doc:name="Choice">
+			<when expression="#[flowVars['status'] == 'PROCESSED']">
+				<set-variable value="#[xpath3('//name')]" variableName="name"
+					doc:name="Variable" />
+				<set-variable value="#[xpath3('//username')]"
+					variableName="username" doc:name="Variable" />
+				<expression-component doc:name="Expression">
+					<![CDATA[
+						msg='<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="ht tp://www.w3.org/2001/XMLSchema-instance"><soapenv:Body><inquiryResponse xmlns="bankmandiri.h2h.billpayment.ws"><inquiryResult><currency>360</currency><billInfo1>BILL ID     ' + flowVars['username'] + '</billInfo1><billInfo2>NAMA        ' + flowVars['name'] + '</billInfo2><billInfo3>TRX TYPE    TOPUP</billInfo3><billInfo4>ISSUER      OPTIMA</billInfo4><billInfo5>ISSUER ID   000000</billInfo5><billDetails><BillDetail><billCode>01</billCode><billName>TOPUP</billName><billShortName>TOPUP</billShortName><billAmount>' + flowVars['amount'] + '</billAmount></BillDetail></billDetails><status><isError>False</isError><errorCode>00</errorCode><statusDescription>PROCESSED</statusDescription></status></inquiryResult></inquiryResponse></soapenv:Body></soapenv:Envelope>';
+						payload = msg;]]>
+				</expression-component>
+				<logger level="INFO"
+					message="[Topup-Inquiry RESPONSE/#[correlationID] : {status=#[flowVars['status']]}, {username=#[flowVars['username']]}, {name=#[flowVars['name']]}]"
+					doc:name="Logger" />
+			</when>
+			<otherwise>
+				<expression-component doc:name="Expression">
+					<![CDATA[
+						msg='<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><soapenv:Body><inquiryResponse xmlns="bankmandiri.h2h.billpayment.ws"><inquiryResult><currency>360</currency><status><isError>True</isError><errorCode>01</errorCode><statusDescription>' + flowVars['status'] + '</statusDescription></status></inquiryResult></inquiryResponse></soapenv:Body></soapenv:Envelope>';
+						payload = msg;]]>
+				</expression-component>
+				<logger level="INFO"
+					message="[Topup-Inquiry RESPONSE/#[correlationID] : {status=#[flowVars['status']]}]"
+					doc:name="Logger" />
+			</otherwise>
+		</choice>
+		<set-property value="Inquiry" propertyName="path"
+			doc:name="Property" />
+		<set-property value="#[flowVars['noVA']]" propertyName="referenceNo"
+			doc:name="Property" />
+		<vm:outbound-endpoint exchange-pattern="one-way"
+			path="response.access.log" connector-ref="Access_Log_VM" doc:name="VM" />
+	</sub-flow>
+
+	<sub-flow name="paymentTopup">
+		<set-variable variableName="tokennc" value="${api.ws.header.token.nc}"
+			doc:name="Variable" />
+		<set-variable variableName="transferTypeID" value="${topup.transfer.type.id}"
+			doc:name="Variable" />
+		<set-variable variableName="fromMember" value="${topup.from.username}"
+			doc:name="Variable" />
+		<set-variable variableName="bankCode" value="${va.bank.code}"
+			doc:name="Variable" />
+		<set-variable variableName="clusterID" value="${app.cluster.id}"
+			doc:name="Variable" />
+		<expression-component doc:name="Expression">
+		<![CDATA[
+			msg='<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ser="http://services.bellatrix.org/">
+				   <soapenv:Header>
+				      <ser:headerAuth>
+				         <token>' + flowVars['tokennc'] + '</token>
+				      </ser:headerAuth>
+				   </soapenv:Header>
+				   <soapenv:Body>
+				      <ser:topupPayment>
+				         <amount>' + flowVars['amount'] + '</amount>
+				         <bankCode>' + flowVars['bankCode'] + '</bankCode>
+				         <channelID>' + flowVars['channelID'] + '</channelID>
+				         <fromMember>' + flowVars['fromMember'] + '</fromMember>
+				         <referenceNumber>' + flowVars['refNo'] + '</referenceNumber>
+				         <traceNumber>' + flowVars['traceNumber'] + '</traceNumber>
+				         <transactionID>' + flowVars['correlationID'] + '</transactionID>
+				         <transferTypeID>' + flowVars['transferTypeID'] + '</transferTypeID>
+				      </ser:topupPayment>
+				   </soapenv:Body>
+				</soapenv:Envelope>';
+			payload = msg;]]>
+		</expression-component>
+		<logger level="INFO" message="#[payload]" />
+		<http:request config-ref="HTTP_Request_Configuration"
+			path="interbanks" method="POST" doc:name="HTTP">
+			<http:request-builder>
+				<http:header headerName="soapaction" value="&quot;topupPayment&quot;" />
+			</http:request-builder>
+		</http:request>
+		<byte-array-to-string-transformer
+			doc:name="Byte Array to String" />
+		<set-variable value="#[xpath3('//status/message')]"
+			variableName="status" doc:name="Variable" />
+		<choice doc:name="Choice">
+			<when expression="#[flowVars['status'] == 'PROCESSED']">
+				<set-variable value="#[xpath3('//name')]" variableName="name"
+					doc:name="Variable" />
+				<set-variable value="#[xpath3('//username')]"
+					variableName="username" doc:name="Variable" />
+				<set-variable value="#[xpath3('//transactionNumber')]"
+					variableName="trxNo" doc:name="Variable" />
+				<expression-component doc:name="Expression">
+					<![CDATA[
+						msg='<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www .w3.org/2001/XMLSchema-instance"><soapenv:Body><paymentResponse xmlns="bankmandiri.h2h.billpayment.ws"><paymentResult><billInfo1>BILL ID     ' + flowVars['username'] + '</billInfo1><billInfo2>NAMA        ' + flowVars['name'] + '</billInfo2><billInfo3>REFNO       ' + flowVars['trxNo'] + '</billInfo3><billInfo4>ISSUER      OPTIMA</billInfo4><billInfo5>ISSUER ID   000000</billInfo5><status><isError>False</isError><errorCode>00</errorCode><statusDescription>PROCESSED</statusDescription></status></paymentResult></paymentResponse></soapenv:Body></soapenv:Envelope>';
+						payload = msg;]]>
+				</expression-component>
+				<logger level="INFO"
+					message="[Topup-Payment RESPONSE/#[correlationID] : {status=#[flowVars['status']]}, {username=#[flowVars['username']]}, {name=#[flowVars['name']]}, {transactionNumber=#[flowVars['trxNo']]}]"
+					doc:name="Logger" />
+			</when>
+			<otherwise>
+				<expression-component doc:name="Expression">
+					<![CDATA[
+						msg='<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www .w3.org/2001/XMLSchema-instance"><soapenv:Body><paymentResponse xmlns="bankmandiri.h2h.billpayment.ws"><paymentResult><status><isError>False</isError><errorCode>01</errorCode><statusDescription>' + flowVars['status'] + '</statusDescription></status></paymentResult></paymentResponse></soapenv:Body></soapenv:Envelope>';
+						payload = msg;]]>
+				</expression-component>
+				<logger level="INFO"
+					message="[Topup-Payment RESPONSE/#[correlationID] : {status=#[flowVars['status']]}]"
+					doc:name="Logger" />
+			</otherwise>
+		</choice>
+		<set-property value="Payment" propertyName="path"
+			doc:name="Property" />
+		<set-property value="#[flowVars['noVA']]" propertyName="referenceNo"
+			doc:name="Property" />
+		<vm:outbound-endpoint exchange-pattern="one-way"
+			path="response.access.log" connector-ref="Access_Log_VM" doc:name="VM" />
+	</sub-flow>
+
+	<sub-flow name="paymentMerchantTopup">
+		<set-variable variableName="tokennc" value="${api.ws.header.token.nc}"
+			doc:name="Variable" />
+		<set-variable variableName="transferTypeID"
+			value="${topup.deposit.merchant.transfer.type.id}" doc:name="Variable" />
+		<set-variable variableName="fromMember" value="${topup.from.username}"
+			doc:name="Variable" />
+		<set-variable variableName="bankCode" value="${va.bank.code}"
+			doc:name="Variable" />
+		<set-variable variableName="clusterID" value="${app.cluster.id}"
+			doc:name="Variable" />
+		<expression-component doc:name="Expression">
+		<![CDATA[
+			msg='<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ser="http://services.bellatrix.org/">
+				   <soapenv:Header>
+				      <ser:headerAuth>
+				         <token>' + flowVars['tokennc'] + '</token>
+				      </ser:headerAuth>
+				   </soapenv:Header>
+				   <soapenv:Body>
+				      <ser:topupPayment>
+				         <amount>' + flowVars['amount'] + '</amount>
+				         <bankCode>' + flowVars['bankCode'] + '</bankCode>
+				         <channelID>' + flowVars['channelID'] + '</channelID>
+				         <fromMember>' + flowVars['fromMember'] + '</fromMember>
+				         <referenceNumber>' + flowVars['refNo'] + '</referenceNumber>
+				         <traceNumber>' + flowVars['traceNumber'] + '</traceNumber>
+				         <transactionID>' + flowVars['correlationID'] + '</transactionID>
+				         <transferTypeID>' + flowVars['transferTypeID'] + '</transferTypeID>
+				      </ser:topupPayment>
+				   </soapenv:Body>
+				</soapenv:Envelope>';
+			payload = msg;]]>
+		</expression-component>
+		<logger level="INFO" message="#[payload]" />
+		<http:request config-ref="HTTP_Request_Configuration"
+			path="interbanks" method="POST" doc:name="HTTP">
+			<http:request-builder>
+				<http:header headerName="soapaction" value="&quot;topupPayment&quot;" />
+			</http:request-builder>
+		</http:request>
+		<byte-array-to-string-transformer
+			doc:name="Byte Array to String" />
+		<set-variable value="#[xpath3('//status/message')]"
+			variableName="status" doc:name="Variable" />
+		<choice doc:name="Choice">
+			<when expression="#[flowVars['status'] == 'PROCESSED']">
+				<set-variable value="#[xpath3('//name')]" variableName="name"
+					doc:name="Variable" />
+				<set-variable value="#[xpath3('//username')]"
+					variableName="username" doc:name="Variable" />
+				<set-variable value="#[xpath3('//transactionNumber')]"
+					variableName="trxNo" doc:name="Variable" />
+				<expression-component doc:name="Expression">
+					<![CDATA[
+						msg='<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www .w3.org/2001/XMLSchema-instance"><soapenv:Body><paymentResponse xmlns="bankmandiri.h2h.billpayment.ws"><paymentResult><billInfo1>BILL ID     ' + flowVars['username'] + '</billInfo1><billInfo2>NAMA        ' + flowVars['name'] + '</billInfo2><billInfo3>REFNO       ' + flowVars['trxNo'] + '</billInfo3><billInfo4>ISSUER      OPTIMA</billInfo4><billInfo5>ISSUER ID   000000</billInfo5><status><isError>False</isError><errorCode>00</errorCode><statusDescription>PROCESSED</statusDescription></status></paymentResult></paymentResponse></soapenv:Body></soapenv:Envelope>';
+						payload = msg;]]>
+				</expression-component>
+				<logger level="INFO"
+					message="[Topup Deposit-Payment RESPONSE/#[correlationID] : {status=#[flowVars['status']]}, {username=#[flowVars['username']]}, {name=#[flowVars['name']]}, {transactionNumber=#[flowVars['trxNo']]}]"
+					doc:name="Logger" />
+			</when>
+			<otherwise>
+				<expression-component doc:name="Expression">
+					<![CDATA[
+						msg='<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www .w3.org/2001/XMLSchema-instance"><soapenv:Body><paymentResponse xmlns="bankmandiri.h2h.billpayment.ws"><paymentResult><status><isError>False</isError><errorCode>01</errorCode><statusDescription>' + flowVars['status'] + '</statusDescription></status></paymentResult></paymentResponse></soapenv:Body></soapenv:Envelope>';
+						payload = msg;]]>
+				</expression-component>
+				<logger level="INFO"
+					message="[Topup Deposit-Payment RESPONSE/#[correlationID] : {status=#[flowVars['status']]}]"
+					doc:name="Logger" />
+			</otherwise>
+		</choice>
+		<set-property value="Payment" propertyName="path"
+			doc:name="Property" />
+		<set-property value="#[flowVars['noVA']]" propertyName="referenceNo"
+			doc:name="Property" />
+		<vm:outbound-endpoint exchange-pattern="one-way"
+			path="response.access.log" connector-ref="Access_Log_VM" doc:name="VM" />
+	</sub-flow>
+
+	<sub-flow name="paymentAgentTopup">
+		<set-variable variableName="tokennc" value="${api.ws.header.token.nc}"
+			doc:name="Variable" />
+		<set-variable variableName="transferTypeID"
+			value="${topup.deposit.agent.transfer.type.id}" doc:name="Variable" />
+		<set-variable variableName="fromMember" value="${topup.from.username}"
+			doc:name="Variable" />
+		<set-variable variableName="bankCode" value="${va.bank.code}"
+			doc:name="Variable" />
+		<set-variable variableName="clusterID" value="${app.cluster.id}"
+			doc:name="Variable" />
+		<expression-component doc:name="Expression">
+		<![CDATA[
+			msg='<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ser="http://services.bellatrix.org/">
+				   <soapenv:Header>
+				      <ser:headerAuth>
+				         <token>' + flowVars['tokennc'] + '</token>
+				      </ser:headerAuth>
+				   </soapenv:Header>
+				   <soapenv:Body>
+				      <ser:topupPayment>
+				         <amount>' + flowVars['amount'] + '</amount>
+				         <bankCode>' + flowVars['bankCode'] + '</bankCode>
+				         <channelID>' + flowVars['channelID'] + '</channelID>
+				         <fromMember>' + flowVars['fromMember'] + '</fromMember>
+				         <referenceNumber>' + flowVars['refNo'] + '</referenceNumber>
+				         <traceNumber>' + flowVars['traceNumber'] + '</traceNumber>
+				         <transactionID>' + flowVars['correlationID'] + '</transactionID>
+				         <transferTypeID>' + flowVars['transferTypeID'] + '</transferTypeID>
+				      </ser:topupPayment>
+				   </soapenv:Body>
+				</soapenv:Envelope>';
+			payload = msg;]]>
+		</expression-component>
+		<logger level="INFO" message="#[payload]" />
+		<http:request config-ref="HTTP_Request_Configuration"
+			path="interbanks" method="POST" doc:name="HTTP">
+			<http:request-builder>
+				<http:header headerName="soapaction" value="&quot;topupPayment&quot;" />
+			</http:request-builder>
+		</http:request>
+		<byte-array-to-string-transformer
+			doc:name="Byte Array to String" />
+		<set-variable value="#[xpath3('//status/message')]"
+			variableName="status" doc:name="Variable" />
+		<choice doc:name="Choice">
+			<when expression="#[flowVars['status'] == 'PROCESSED']">
+				<set-variable value="#[xpath3('//name')]" variableName="name"
+					doc:name="Variable" />
+				<set-variable value="#[xpath3('//username')]"
+					variableName="username" doc:name="Variable" />
+				<set-variable value="#[xpath3('//transactionNumber')]"
+					variableName="trxNo" doc:name="Variable" />
+				<expression-component doc:name="Expression">
+					<![CDATA[
+						msg='<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www .w3.org/2001/XMLSchema-instance"><soapenv:Body><paymentResponse xmlns="bankmandiri.h2h.billpayment.ws"><paymentResult><billInfo1>BILL ID     ' + flowVars['username'] + '</billInfo1><billInfo2>NAMA        ' + flowVars['name'] + '</billInfo2><billInfo3>REFNO       ' + flowVars['trxNo'] + '</billInfo3><billInfo4>ISSUER      OPTIMA</billInfo4><billInfo5>ISSUER ID   000000</billInfo5><status><isError>False</isError><errorCode>00</errorCode><statusDescription>PROCESSED</statusDescription></status></paymentResult></paymentResponse></soapenv:Body></soapenv:Envelope>';
+						payload = msg;]]>
+				</expression-component>
+				<logger level="INFO"
+					message="[Topup Deposit-Payment RESPONSE/#[correlationID] : {status=#[flowVars['status']]}, {username=#[flowVars['username']]}, {name=#[flowVars['name']]}, {transactionNumber=#[flowVars['trxNo']]}]"
+					doc:name="Logger" />
+			</when>
+			<otherwise>
+				<expression-component doc:name="Expression">
+					<![CDATA[
+						msg='<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www .w3.org/2001/XMLSchema-instance"><soapenv:Body><paymentResponse xmlns="bankmandiri.h2h.billpayment.ws"><paymentResult><status><isError>False</isError><errorCode>01</errorCode><statusDescription>' + flowVars['status'] + '</statusDescription></status></paymentResult></paymentResponse></soapenv:Body></soapenv:Envelope>';
+						payload = msg;]]>
+				</expression-component>
+				<logger level="INFO"
+					message="[Topup Deposit-Payment RESPONSE/#[correlationID] : {status=#[flowVars['status']]}]"
+					doc:name="Logger" />
+			</otherwise>
+		</choice>
+		<set-property value="Payment" propertyName="path"
+			doc:name="Property" />
+		<set-property value="#[flowVars['noVA']]" propertyName="referenceNo"
+			doc:name="Property" />
+		<vm:outbound-endpoint exchange-pattern="one-way"
+			path="response.access.log" connector-ref="Access_Log_VM" doc:name="VM" />
+	</sub-flow>
+
+	<sub-flow name="reversalTopup">
+		<set-variable variableName="tokennc" value="${api.ws.header.token.nc}"
+			doc:name="Variable" />
+		<set-variable variableName="transferTypeID" value="${topup.transfer.type.id}"
+			doc:name="Variable" />
+		<set-variable variableName="fromMember" value="${topup.from.username}"
+			doc:name="Variable" />
+		<set-variable variableName="bankCode" value="${va.bank.code}"
+			doc:name="Variable" />
+		<set-variable variableName="clusterID" value="${app.cluster.id}"
+			doc:name="Variable" />
+		<expression-component doc:name="Expression">
+		<![CDATA[
+			msg='<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ser="http://services.bellatrix.org/">
+				   <soapenv:Header>
+				      <ser:headerAuth>
+				         <token>' + flowVars['tokennc'] + '</token>
+				      </ser:headerAuth>
+				   </soapenv:Header>
+				   <soapenv:Body>
+				      <ser:topupReversal>
+				         <traceNumber>' + flowVars['traceNumber'] + '</traceNumber>
+				      </ser:topupReversal>
+				   </soapenv:Body>
+				</soapenv:Envelope>';
+			payload = msg;]]>
+		</expression-component>
+		<http:request config-ref="HTTP_Request_Configuration"
+			path="interbanks" method="POST" doc:name="HTTP">
+			<http:request-builder>
+				<http:header headerName="soapaction" value="&quot;topupReversal&quot;" />
+			</http:request-builder>
+		</http:request>
+		<byte-array-to-string-transformer
+			doc:name="Byte Array to String" />
+		<set-variable value="#[xpath3('//status/message')]"
+			variableName="status" doc:name="Variable" />
+		<choice doc:name="Choice">
+			<when expression="#[flowVars['status'] == 'PROCESSED']">
+				<expression-component doc:name="Expression">
+					<![CDATA[
+						msg='<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www .w3.org/2001/XMLSchema-instance"><soapenv:Body><ReversalResponse xmlns="bankmandiri.h2h.billpayment.ws"><reverseResult><status><isError>False</isError><errorCode>00</errorCode><statusDescription>PROCESSED</statusDescription></status></reverseResult></ReversalResponse></soapenv:Body></soapenv:Envelope>';
+						payload = msg;]]>
+				</expression-component>
+			</when>
+			<otherwise>
+				<expression-component doc:name="Expression">
+						<![CDATA[
+						msg='<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www .w3.org/2001/XMLSchema-instance"><soapenv:Body><ReversalResponse xmlns="bankmandiri.h2h.billpayment.ws"><reverseResult><status><isError>True</isError><errorCode>01</errorCode><statusDescription>' + flowVars['status'] + '</statusDescription></status></reverseResult></ReversalResponse></soapenv:Body></soapenv:Envelope>';
+						payload = msg;]]>
+				</expression-component>
+			</otherwise>
+		</choice>
+		<logger level="INFO"
+			message="[Topup-Reversal RESPONSE/#[correlationID] : {status=#[flowVars['status']]}]"
+			doc:name="Logger" />
+		<set-property value="Reversal" propertyName="path"
+			doc:name="Property" />
+		<set-property value="#[flowVars['noVA']]" propertyName="referenceNo"
+			doc:name="Property" />
+		<vm:outbound-endpoint exchange-pattern="one-way"
+			path="response.access.log" connector-ref="Access_Log_VM" doc:name="VM" />
+	</sub-flow>
+</mule>
